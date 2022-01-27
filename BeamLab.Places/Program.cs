@@ -1,6 +1,8 @@
 using Azure.Storage.Blobs;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Azure;
 using Microsoft.EntityFrameworkCore;
+using BeamLab.Places;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -10,6 +12,11 @@ builder.Services.AddDbContext<PlaceDb>(dbContextOptionsBuilder =>
     //dbContextOptionsBuilder.UseSqlServer(builder.Configuration["DefaultConnection"]);
     dbContextOptionsBuilder.UseInMemoryDatabase("BeamLab.Places");
 });
+
+//builder.Services.AddAzureClients(azureClientFactoryBuilder =>
+//{
+//    azureClientFactoryBuilder.AddBlobServiceClient(builder.Configuration["AzureStorageConnectionString"]);
+//});
 
 // Enable the API explorer
 builder.Services.AddEndpointsApiExplorer();
@@ -52,19 +59,20 @@ if (app.Environment.IsDevelopment())
     }
 
     // Redirect root browses to the swagger page
-    app.MapGet("/", () => {
+    app.MapGet("/", () =>
+    {
         return Results.Redirect("/swagger");
     });
 }
 
-// Enables GET of all jobs
+// Enables GET of all places
 app.MapGet("/places", async (PlaceDb db) =>
         await db.Places.ToListAsync()
     )
     .Produces<List<Place>>(StatusCodes.Status200OK)
     .WithName("GetAllPlaces");
 
-// Enables creation of a new job 
+// Enables creation of a new place 
 app.MapPost("/places/", async ([FromBody] Place place, [FromServices] PlaceDb db) =>
 {
     db.Places.Add(place);
@@ -76,7 +84,7 @@ app.MapPost("/places/", async ([FromBody] Place place, [FromServices] PlaceDb db
     .Produces<Place>(StatusCodes.Status201Created)
     .WithName("CreatePlace");
 
-// Enables GET of a specific job
+// Enables GET of a specific place
 app.MapGet("/places/{id}", async (int id, PlaceDb db) =>
         await db.Places.Include("Photos").FirstOrDefaultAsync(place => place.Id == id)
             is Place place
@@ -87,7 +95,7 @@ app.MapGet("/places/{id}", async (int id, PlaceDb db) =>
     .Produces(StatusCodes.Status404NotFound)
     .WithName("GetPlace");
 
-// Enables searching for a job
+// Enables searching for a place
 app.MapGet("/places/search/{query}", (string query, PlaceDb db) =>
         db.Places
             .Include("Photos")
@@ -134,11 +142,27 @@ app.MapPost("/places/{placeId}/photos",
 
         return Results.Created($"/places/{placeId}", place);
     })
-    .Produces<Place>(StatusCodes.Status200OK, "application/json");
-    //.WithName(ImageExtensionFilter.UPLOAD_SITE_PHOTO_OPERATION_ID);
+    .Produces<Place>(StatusCodes.Status200OK, "application/json")
+    .WithName(ImageExtensionFilter.UPLOAD_SITE_PHOTO_OPERATION_ID);
+
+
+// Enables searching for a place by coordinates
+app.MapGet("/places/search/location/{coordinate}", (Coordinate coordinate, PlaceDb db) =>
+        db.Places
+            .Include("Photos")
+            .Where(x => x.Latitude > coordinate.Latitude &&
+                   x .Latitude < coordinate.Latitude &&
+                   x.Longitude > coordinate.Longitude &&
+                   x.Longitude < coordinate.Longitude)
+            is IEnumerable<Place> places
+                ? Results.Ok(places)
+                : Results.NotFound(new Place[] { })
+    )
+    .Produces<List<Place>>(StatusCodes.Status200OK)
+    .Produces(StatusCodes.Status404NotFound)
+    .WithName("SearchPlacesByCoordinate");
 
 app.Run();
-
 
 //Models & DbContext
 public class PlacePhoto
@@ -172,3 +196,26 @@ class PlaceDb : DbContext
         base.OnModelCreating(modelBuilder);
     }
 }
+
+public record Coordinate(double Latitude, double Longitude)
+{
+    public static bool TryParse(string input, out Coordinate? coordinate)
+    {
+        coordinate = default;
+        var splitArray = input.Split(",", 2);
+
+        if (splitArray.Length != 2)
+            return false;
+
+        if (!double.TryParse(splitArray[0], out var lat))
+            return false;
+
+        if (!double.TryParse(splitArray[1], out var lon))
+            return false;
+
+        coordinate = new(lat, lon);
+
+        return true;
+    }
+}
+
